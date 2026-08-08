@@ -24,6 +24,62 @@ import numpy as np
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 
+
+def _preflight() -> None:
+    """Fail with instructions rather than a traceback if deps are missing.
+
+    The usual cause is running the system Python when the dependencies were
+    installed into the project's virtualenv, so say so explicitly and give the
+    exact command instead of making the user infer it from an ImportError.
+    """
+    required = {
+        "numpy": "numpy",
+        "numba": "numba",
+        "sounddevice": "sounddevice",
+        "cv2": "opencv-python",
+        "mediapipe": "mediapipe",
+        "yaml": "PyYAML",
+    }
+    missing = []
+    for module, package in required.items():
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    if not missing:
+        return
+
+    venv_py = REPO / ".venv" / "Scripts" / "python.exe"
+    if not venv_py.exists():
+        venv_py = REPO / ".venv" / "bin" / "python"
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+
+    print("live_pedal cannot start: missing " + ", ".join(missing), file=sys.stderr)
+    print(f"\nrunning: {sys.executable}", file=sys.stderr)
+
+    if venv_py.exists() and not in_venv:
+        print(
+            "\nThis project has a virtualenv with the dependencies already "
+            "installed,\nbut you are running the system Python. Use one of:\n"
+            "\n    .venv\\Scripts\\activate     (then: python run.py)"
+            "\n    .venv\\Scripts\\python.exe run.py"
+            "\n    run.bat                     (picks the right one for you)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "\nInstall the dependencies:\n"
+            "\n    python -m venv .venv"
+            "\n    .venv\\Scripts\\activate"
+            "\n    pip install -r requirements.txt"
+            "\n    python tools/fetch_model.py",
+            file=sys.stderr,
+        )
+    raise SystemExit(1)
+
+
+_preflight()
+
 from live_pedal.config import load_config, resolve_path       # noqa: E402
 from live_pedal.ipc import FLAG_QUIT, STAT_XRUNS, VectorChannel  # noqa: E402
 from live_pedal.mapping import Mapper, MappingError           # noqa: E402

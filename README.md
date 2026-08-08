@@ -102,6 +102,17 @@ python run.py
 
 Press `q` in the camera window to stop, or `Ctrl+C` in the terminal.
 
+> **Use the virtualenv's Python.** If you open a fresh terminal and forget to
+> `activate`, `python run.py` will be the *system* Python, which does not have
+> the dependencies. `run.bat` sidesteps this entirely — it always uses
+> `.venv\Scripts\python.exe` and passes your arguments through:
+>
+> ```bash
+> run.bat                 # same as python run.py
+> run.bat -c lead
+> run.bat --list-devices
+> ```
+
 ---
 
 ## Latency
@@ -339,6 +350,10 @@ the controls.
 **A gesture doesn't reach the end of its range.** Narrow `in_lo`/`in_hi` — see
 above.
 
+**`ModuleNotFoundError: No module named 'sounddevice'`.** You are running the
+system Python instead of the virtualenv. Use `run.bat`, or
+`.venv\Scripts\activate` first.
+
 **`hand model not found`.** Run `python tools/fetch_model.py`.
 
 **Sound is fine but gestures lag.** That is camera frame rate, not audio. See
@@ -350,6 +365,7 @@ the exposure section.
 
 ```
 run.py                      entry point, orchestrates both processes
+run.bat                     launcher that always uses the virtualenv
 live_pedal/
   ipc.py                    lock-free shared memory (seqlock)
   config.py                 YAML loading, presets, inheritance
