@@ -89,6 +89,7 @@ Check what it can see, without touching anything:
 
 ```bash
 python tools/list_devices.py         # audio devices and expected latency
+python tools/test_output.py --sweep  # beep each output: which can you hear?
 python run.py --dry-run              # validate config, print the rig
 python tests/test_gestures.py        # gesture maths self-test
 python tools/bench_dsp.py            # DSP benchmark and sanity check
@@ -334,9 +335,43 @@ python run.py --seconds 30             # stop automatically (soak testing)
 
 ## Troubleshooting
 
-**No sound.** Check the input meter in the terminal. If it never moves, the
-guitar is on a different input — try `input_channel: 1`, or
-`python run.py --list-devices` and set the device explicitly.
+**No sound — but the meters are moving.** Read the meters first, they tell you
+which half is wrong:
+
+```
+in ###############-   -0dB    out ####------------  -23dB    dsp 4.0%  xruns 0
+```
+
+If `out` shows a level, the audio is fine and going somewhere — just not
+somewhere you are listening. **Your audio interface is its own sound card.**
+When `output` says `USB AUDIO CODEC`, sound goes to the interface's outputs, and
+your laptop speakers and Windows volume slider have nothing to do with it. Plug
+headphones into the *interface*.
+
+To find out what you can actually hear:
+
+```bash
+python tools/test_output.py --sweep     # beeps every output in turn
+```
+
+Then set what you heard:
+
+```bash
+run.bat --output-device 25              # or put it in the config
+```
+
+Using the interface for input and the laptop for output works for testing, but
+the two run on independent clocks and will slowly drift, which you may hear as
+occasional clicks. Same device for both is the right answer.
+
+**No sound and the `in` meter never moves.** The guitar is on a different input
+— try `input_channel: 1`, or `python run.py --list-devices` and set the device
+explicitly.
+
+**`in` sits at `-0dB`.** That is full scale: the converter is clipping before
+live_pedal ever sees the signal, and no software setting can undo it. Turn the
+**gain knob on the interface** down until hard strums peak around −12 to −6 dB.
+(`input_gain_db` is applied after the converter, so it cannot fix this.)
 
 **Dropouts (`xruns` climbing).** Raise `blocksize` to 512. If that fixes it,
 the driver could not keep up, not the DSP — the terminal shows the actual DSP
