@@ -8,6 +8,7 @@ nothing else in the system needs to know about it.
 from __future__ import annotations
 
 from .base import Effect, ParamSpec, db_to_lin
+from .chords import ChordPad
 from .drive import Drive
 from .filters import EQ3, Filter, Gate, Wah
 from .modulation import Chorus, Flanger, Phaser, Tremolo, Vibrato
@@ -20,6 +21,7 @@ ALL_EFFECTS: tuple[type[Effect], ...] = (
     Volume,
     Octaver,
     Drive,
+    ChordPad,
     Wah,
     Filter,
     EQ3,

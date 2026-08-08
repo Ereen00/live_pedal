@@ -92,6 +92,7 @@ python tools/list_devices.py         # audio devices and expected latency
 python tools/test_output.py --sweep  # beep each output: which can you hear?
 python run.py --dry-run              # validate config, print the rig
 python tests/test_gestures.py        # gesture maths self-test
+python tests/test_chordpad.py        # chord pad self-test
 python tools/bench_dsp.py            # DSP benchmark and sanity check
 ```
 
@@ -206,6 +207,7 @@ You can drop your hand to the strings and the tone stays put.
 
 | | |
 |---|---|
+| `chordpad` | gesture-selected chord synth, triggered by playing — see below |
 | `gate` | noise gate with hold |
 | `drive` | overdrive/distortion/fuzz, 5 curves, 4× oversampled |
 | `wah` | resonant bandpass sweep |
@@ -236,6 +238,66 @@ Two notes worth knowing before you build a chain:
 
 ---
 
+## The chord pad
+
+The default rig uses gestures for one thing: choosing a chord. It is not a
+background drone — **nothing sounds until you actually strike a string.** The
+chord then swells in underneath what you played, holds while the note rings, and
+fades out over a couple of seconds when you stop.
+
+| Gesture | Chord |
+|---|---|
+| Open hand, five fingers | **Em** |
+| Fist | **E** |
+| Index finger up | **Fm** |
+| Two fingers (peace) | **B7b9** |
+
+The choice **latches**: drop your hand and the chord stays selected until you
+make a different gesture. And a new gesture takes effect *at the next note you
+play*, not immediately, so the chord never changes underneath a pad that is
+still ringing (`change_on_trigger: 0` if you want it instant).
+
+### How it decides you played a note
+
+A fast envelope of the guitar is compared against a slow one, so it detects the
+*rise* rather than the level — which means a note played while the pad is still
+decaying retriggers it, not just the first note out of silence.
+
+| If | Change |
+|---|---|
+| It triggers on finger noise | Raise `threshold_db` toward `-28` |
+| It misses quiet notes | Lower `threshold_db` toward `-42` |
+| One pick stroke fires it twice | Raise `retrigger_ms` |
+| The pad drops out while you are still ringing | Lower `hold_db` |
+| The fade is too long / too short | `release_ms` (2200 = about 2.2 s) |
+
+### Changing the chords
+
+Any chords, any voicing. Notes are scientific pitch notation, `C4` = middle C:
+
+```yaml
+  - type: chordpad
+    chords:
+      - name: Em
+        notes: [E2, B2, E3, G3,  B3]
+      - name: Am7
+        notes: [A2, E3, G3, C4, E4]
+```
+
+To reassign a gesture, change one `source:` line — the `hi:` value is the index
+into that chord list:
+
+```yaml
+  - source: pose_ok        # was pose_point
+    target: chordpad.chord
+    hi: 2                  # third chord in the list
+    mode: latch
+```
+
+Other poses available: `pose_ok`, `pose_thumbup`.
+
+---
+
 ## Assigning gestures
 
 This is the part you will actually edit. A mapping is one line saying "this hand
@@ -258,7 +320,7 @@ mappings:
 | `curve` | `lin`, `square`, `sqrt`, `scurve` — shapes the response |
 | `scale` | `lin` or `log` — frequencies want `log` |
 | `invert` | swap the ends |
-| `mode` | `continuous` (default), `gate`, `toggle` |
+| `mode` | `continuous` (default), `gate`, `toggle`, `latch` |
 | `smooth` | extra smoothing, 0 to <1 |
 | `when` | only apply while this gesture is true (default: `present`) |
 

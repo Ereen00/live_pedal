@@ -35,7 +35,11 @@ from ..layout import ParamLayout
 
 CURVES = ("lin", "square", "sqrt", "scurve")
 SCALES = ("lin", "log")
-MODES = ("continuous", "gate", "toggle")
+MODES = ("continuous", "gate", "toggle", "latch")
+
+# Modes that only write on an edge. Several of these can share one target
+# without fighting -- that is exactly how a set of poses selects one chord.
+EDGE_MODES = ("toggle", "latch")
 
 
 class MappingError(ValueError):
@@ -101,6 +105,8 @@ class Mapper:
         for target, rules in seen.items():
             if len(rules) < 2:
                 continue
+            if all(r.mode in EDGE_MODES for r in rules):
+                continue          # edge-driven: they take turns, not fight
             if len({r.gate for r in rules}) == len(rules):
                 continue          # each has a distinct gate: probably deliberate
             names = ", ".join(r.source_name for r in rules)
@@ -234,6 +240,20 @@ class Mapper:
                 val = self._output(r, u)
             elif r.mode == "gate":
                 val = r.out_hi if f >= r.threshold else r.out_lo
+            elif r.mode == "latch":
+                # Write once, on the rising edge, then leave the parameter
+                # alone. This is what lets four different poses each select a
+                # chord: whichever fired last owns the value, and releasing the
+                # gesture does not revert it.
+                high = f >= r.threshold
+                if high and r.armed:
+                    r.armed = False
+                    self._targets[r.target] = self.layout.clamp(r.target, r.out_hi)
+                    r.value = r.out_hi
+                    r.initialised = True
+                elif not high:
+                    r.armed = True
+                continue
             else:                              # toggle
                 high = f >= r.threshold
                 if high and r.armed:
@@ -260,6 +280,12 @@ class Mapper:
         lines = []
         for r in self.rules:
             arrow = "->"
+            if r.mode == "latch":
+                lines.append(
+                    f"  {r.source_name:<12} {arrow} {r.target_name:<26} "
+                    f"= {r.out_hi:<8g} [latch]"
+                )
+                continue
             extra = ""
             if r.mode != "continuous":
                 extra += f"  [{r.mode} @ {r.threshold:g}]"

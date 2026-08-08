@@ -36,6 +36,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "shape": ("soft", "hard", "fuzz", "tube", "fold"),      # drive only
     "mode": ("lp", "bp", "hp", "notch", "peak"),
     "lfo": ("sine", "triangle", "square", "ramp"),
+    "wave": ("saw", "square", "sine", "triangle"),          # chord pad
 }
 LFO_KINDS = ("tremolo", "chorus", "flanger", "vibrato")
 
@@ -52,6 +53,8 @@ def resolve_value(kind: str, key: str, value) -> float:
         table = ENUMS["lfo"] if kind in LFO_KINDS else ENUMS["shape"]
     elif key == "mode":
         table = ENUMS["mode"]
+    elif key == "wave":
+        table = ENUMS["wave"]
     if table and text in table:
         return float(table.index(text))
     try:
@@ -114,11 +117,14 @@ class Chain:
         self.current[:] = self.target
         self.prev[:] = self.target
 
-        # --- wire effects to their views and let them allocate --------------
+        # --- wire effects to their views, then let them allocate ------------
+        # Views are attached first because prepare() may read its own defaults
+        # -- the chord pad, for instance, builds its oscillator table from the
+        # unison and detune settings.
         for fx, (a, b) in zip(effects, self._slices):
-            fx.prepare(sr, block)
             fx.pa = self.prev[a : b + 1]
             fx.pb = self.current[a : b + 1]
+            fx.prepare(sr, block)
 
         # --- ping-pong work buffers ----------------------------------------
         self._a = np.zeros(block, dtype=np.float64)
@@ -144,12 +150,29 @@ class Chain:
             if name in used:
                 raise ValueError(f"duplicate effect name {name!r} in chain")
             used.add(name)
-            overrides = {
-                k: resolve_value(kind, k, v)
-                for k, v in entry.items()
-                if k not in ("type", "name")
-            }
-            effects.append(EFFECTS[kind](name=name, **overrides))
+
+            effect_cls = EFFECTS[kind]
+            param_names = {s.name for s in effect_cls.PARAMS}
+            setup_keys = set(effect_cls.SETUP_KEYS)
+
+            overrides: dict[str, float] = {}
+            setup: dict = {}
+            for k, v in entry.items():
+                if k in ("type", "name"):
+                    continue
+                if k in param_names:
+                    overrides[k] = resolve_value(kind, k, v)
+                elif k in setup_keys:
+                    # Not a number: chord tables and the like.
+                    setup[k] = v
+                else:
+                    known = sorted(param_names | setup_keys)
+                    raise ValueError(
+                        f"effect {name!r} ({kind}) has no option {k!r}.\n"
+                        f"  Valid options: {', '.join(known)}"
+                    )
+
+            effects.append(effect_cls(name=name, setup=setup, **overrides))
         return cls(effects, sr, block)
 
     # ------------------------------------------------------------------
@@ -242,6 +265,8 @@ class Chain:
                 self.prev[a:b] = variant
                 for _ in range(2):
                     fx.process(x, y)
+            # Event-gated effects need a push to reach their real work.
+            fx.warmup_hook(x, y)
             if verbose:
                 print(f"    warmed {fx.name}")
 

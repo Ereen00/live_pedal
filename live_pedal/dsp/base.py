@@ -71,10 +71,17 @@ class Effect:
     kind: str = "effect"
     PARAMS: tuple[ParamSpec, ...] = ()
 
-    def __init__(self, name: str | None = None, **overrides: float):
+    # Config that is not a number and therefore cannot live in the parameter
+    # table -- chord definitions, for instance. Declared per effect so a typo in
+    # the YAML is caught rather than silently ignored.
+    SETUP_KEYS: tuple[str, ...] = ()
+
+    def __init__(self, name: str | None = None, setup: dict | None = None,
+                 **overrides: float):
         self.name = name or self.kind
         self.sr = 48000
         self.block = 256
+        self.setup = dict(setup or {})
         self.overrides = dict(overrides)
         # Filled in by the chain when the parameter table is built.
         self.pa: np.ndarray = np.zeros(len(self.PARAMS))
@@ -93,6 +100,16 @@ class Effect:
 
     def process(self, x: np.ndarray, y: np.ndarray) -> None:
         raise NotImplementedError
+
+    def warmup_hook(self, x: np.ndarray, y: np.ndarray) -> None:
+        """Optional: force code paths that ordinary input will not reach.
+
+        The chain's warmup runs ``process`` over a spread of parameter settings,
+        which compiles almost everything. But an effect whose work is gated on
+        an *event* -- the chord pad only synthesises once a note has triggered
+        it -- can sit in its idle branch throughout and leave its real kernels
+        uncompiled until the first note, i.e. mid-performance. Override this to
+        drive those paths deliberately."""
 
     # -- parameter access ---------------------------------------------------
 
