@@ -55,7 +55,7 @@ vision:
   # Which hand controls the effects: left, right, or any.
   # Set this to the hand you are NOT fretting with, so the fretting hand
   # cannot grab the controls when it drifts into frame.
-  hand: any
+  hand: right
 
   mirror: true              # mirror the preview only; tracking sees the real image
   show_window: true
