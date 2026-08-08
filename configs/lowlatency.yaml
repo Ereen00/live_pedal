@@ -1,0 +1,44 @@
+# The smallest, fastest rig: only what a gesture actually touches.
+#
+# Fewer effects is not the point -- 128-sample blocks are. Halving the block
+# size halves the buffering latency, and a short chain leaves enough headroom
+# that the smaller deadline is never in danger.
+#
+#   python run.py -c lowlatency
+
+extends: default.yaml
+name: lowlatency
+
+audio:
+  blocksize: 128            # 2.67 ms per block
+
+vision:
+  smoothing: 0.2            # less averaging: twitchier, but tracks faster
+
+chain:
+  - type: gate
+    threshold_db: -58
+    hold_ms: 60
+
+  - type: wah
+    freq: 700
+    q: 4.5
+    mix: 1.0
+
+  - type: volume
+    gain: 1.0
+
+mappings:
+  - source: openness
+    target: wah.freq
+    lo: 300
+    hi: 2800
+    scale: log
+    curve: scurve
+
+  - source: y
+    target: volume.gain
+    lo: 0.0
+    hi: 1.3
+    invert: true
+    curve: square

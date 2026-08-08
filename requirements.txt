@@ -1,0 +1,11 @@
+# live_pedal runtime dependencies
+#
+# NOTE: numba pins numpy to <2.5, which pip resolves automatically.
+# Do not "upgrade" numpy past what numba supports or the JIT kernels break.
+
+numpy>=2.0,<2.5
+numba>=0.61
+sounddevice>=0.5
+opencv-python>=4.9
+mediapipe>=0.10
+PyYAML>=6.0

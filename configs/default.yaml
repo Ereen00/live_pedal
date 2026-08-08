@@ -1,0 +1,171 @@
+# =====================================================================
+# live_pedal -- default rig
+#
+# This one file describes everything: the sound card, the camera, the
+# effect chain, and which hand movement drives which knob.
+#
+# Check it without touching hardware:   python run.py --dry-run
+# Run it:                               python run.py
+# =====================================================================
+
+name: default
+
+audio:
+  samplerate: 48000
+
+  # Samples per block. This is the biggest latency knob you have.
+  #   128 -> 2.7 ms  (try it; the DSP has plenty of headroom)
+  #   256 -> 5.3 ms  (safe default)
+  #   512 -> 10.7 ms (only if you get dropouts)
+  # If the driver refuses the size you ask for, it says so and uses its own.
+  blocksize: 256
+
+  # Device selection: a substring of the name, a PortAudio index, or null
+  # for the host API default. `python run.py --list-devices` shows them all.
+  # An M-Audio interface running class-compliant usually shows as
+  # "USB AUDIO CODEC".
+  input_device: "USB AUDIO"
+  output_device: "USB AUDIO"
+
+  # auto picks the lowest-latency API available, preferring:
+  #   asio > wdm-ks > wasapi > directsound > mme
+  hostapi: auto
+  wasapi_exclusive: true
+
+  input_channel: 0          # which input the guitar is plugged into (0 = first)
+  input_gain_db: 0.0
+  output_gain_db: -3.0      # a little headroom before the limiter
+  output_limit: 0.99
+  dry_monitor: 0.0          # blend raw guitar back in; 0 = fully processed
+  latency: low
+
+vision:
+  camera_index: 0
+  width: 640
+  height: 480
+  fps: 60
+
+  # Frame rate is your gesture latency, and auto-exposure destroys it: on a
+  # typical laptop webcam in room light, auto gives ~10 fps where manual gives
+  # ~30. Keep this a number. If the picture is too dark for tracking, add light
+  # first; only raise this (-5, -4) as a last resort, and expect to pay frames.
+  # Set to "auto" to hand control back to the driver.
+  exposure: -6
+
+  # Which hand controls the effects: left, right, or any.
+  # Set this to the hand you are NOT fretting with, so the fretting hand
+  # cannot grab the controls when it drifts into frame.
+  hand: any
+
+  mirror: true              # mirror the preview only; tracking sees the real image
+  show_window: true
+  smoothing: 0.35           # 0 = twitchy and immediate, 0.7 = smooth and laggy
+  model: models/hand_landmarker.task
+
+# ---------------------------------------------------------------------
+# The signal chain, in order. Anything you set here is the starting value;
+# mappings below can move it while you play.
+#
+# Available types: gate volume octaver drive wah filter eq3 tone
+#                  pitchshift phaser flanger chorus vibrato tremolo
+#                  delay reverb
+#
+# `enable: 0` loads an effect but leaves it switched off, ready for a
+# gesture to bring it in.
+# ---------------------------------------------------------------------
+chain:
+  - type: gate
+    threshold_db: -55
+    hold_ms: 80
+
+  - type: drive
+    gain_db: 15
+    tone: 0.6
+    level: 0.55
+    shape: soft            # soft hard fuzz tube fold
+    enable: 0              # brought in by making a fist
+
+  - type: wah
+    freq: 700
+    q: 4.0
+    mix: 1.0
+
+  - type: delay
+    time_ms: 380
+    feedback: 0.35
+    mix: 0.0               # opened up by the pinch gesture
+    damping: 0.45
+
+  - type: reverb
+    size: 0.72
+    damping: 0.5
+    mix: 0.12
+
+  - type: volume
+    gain: 1.0
+
+# ---------------------------------------------------------------------
+# Gestures.
+#
+#   source : a hand measurement (see the left panel of the camera window)
+#              present openness pinch spread x y size roll tilt
+#              curl_thumb curl_index curl_middle curl_ring curl_pinky
+#              speed
+#              pose_fist pose_open pose_point pose_peace pose_ok pose_thumbup
+#
+#   target : <effect>.<parameter>, including <effect>.enable
+#   lo/hi  : the output range (lo when the gesture reads 0)
+#   curve  : lin | square | sqrt | scurve   -- shapes the response
+#   scale  : lin | log                      -- how the range is traversed
+#   mode   : continuous | gate | toggle
+#   invert : swap the ends
+#   when   : hold unless this gesture is true (default: present)
+#
+# Every mapping is frozen while no hand is visible, so you can drop your
+# hand to the strings and the tone stays where you left it.
+# ---------------------------------------------------------------------
+mappings:
+
+  # Open your palm to sweep the wah up. This is the headline gesture:
+  # a closed fist sits down at 320 Hz, a flat open hand rides up to 2.6 kHz.
+  - source: openness
+    target: wah.freq
+    lo: 320
+    hi: 2600
+    scale: log
+    curve: scurve
+
+  # Raise your hand to swell the volume, lower it to fade out.
+  # y reads 0 at the top of the frame, so this is inverted.
+  - source: y
+    target: volume.gain
+    lo: 0.0
+    hi: 1.35
+    invert: true
+    curve: square
+
+  # Pinch thumb and forefinger together to open the delay.
+  - source: pinch
+    target: delay.mix
+    lo: 0.55
+    hi: 0.0
+    curve: sqrt
+
+  # Move your hand toward the camera for more room.
+  - source: size
+    target: reverb.mix
+    lo: 0.06
+    hi: 0.45
+
+  # Spread your fingers to push the drive harder.
+  - source: spread
+    target: drive.gain_db
+    lo: 8
+    hi: 30
+
+  # Make a fist to kick the overdrive in, again to drop it out.
+  - source: pose_fist
+    target: drive.enable
+    lo: 0
+    hi: 1
+    mode: toggle

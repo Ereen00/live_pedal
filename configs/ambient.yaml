@@ -1,0 +1,101 @@
+# Big, slow, washy. Your hand becomes the space the guitar sits in.
+#
+# Long delay, large reverb, and a pitch shifter set a fifth up that you fade in
+# by pinching. Everything here is deliberately slow-moving: the mappings use
+# gentle curves and extra smoothing so the sound drifts rather than jumps.
+#
+#   python run.py -c ambient
+
+extends: default.yaml
+name: ambient
+
+audio:
+  blocksize: 256
+  output_gain_db: -5.0
+
+vision:
+  smoothing: 0.55           # heavier averaging suits slow, deliberate moves
+
+chain:
+  - type: gate
+    threshold_db: -60
+    hold_ms: 200
+
+  - type: chorus
+    rate: 0.35
+    depth_ms: 5.0
+    delay_ms: 22
+    mix: 0.4
+
+  - type: pitchshift
+    semitones: 7
+    window_ms: 60
+    mix: 0.0                # brought in by pinching
+    quantise: 1
+
+  - type: delay
+    time_ms: 620
+    feedback: 0.55
+    mix: 0.35
+    damping: 0.55
+
+  - type: reverb
+    size: 0.9
+    damping: 0.35
+    mix: 0.4
+    predelay_ms: 40
+
+  - type: volume
+    gain: 1.0
+
+mappings:
+  # Hand height becomes the size of the room.
+  - source: y
+    target: reverb.mix
+    lo: 0.15
+    hi: 0.75
+    invert: true
+    curve: scurve
+    smooth: 0.3
+
+  - source: y
+    target: reverb.size
+    lo: 0.55
+    hi: 0.98
+    invert: true
+    smooth: 0.3
+
+  # Open your palm to stretch the delay out and let it run away.
+  - source: openness
+    target: delay.feedback
+    lo: 0.30
+    hi: 0.82
+    curve: scurve
+    smooth: 0.25
+
+  - source: openness
+    target: delay.time_ms
+    lo: 380
+    hi: 900
+    scale: log
+    smooth: 0.4
+
+  # Pinch to fade in the harmony a fifth above.
+  - source: pinch
+    target: pitchshift.mix
+    lo: 0.5
+    hi: 0.0
+    curve: sqrt
+
+  # Move toward the camera to thicken the chorus.
+  - source: size
+    target: chorus.depth_ms
+    lo: 2.0
+    hi: 11.0
+
+  # Two fingers up throws the delay wide open.
+  - source: pose_peace
+    target: delay.mix
+    lo: 0.35
+    hi: 0.7
+    mode: toggle

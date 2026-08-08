@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.numba_cache/
+models/*.task
+recordings/
+*.wav
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

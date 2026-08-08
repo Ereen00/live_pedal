@@ -1,0 +1,97 @@
+# Loud. Drive, octave, wah and a tight slapback.
+#
+# The wah here is mapped to hand *tilt* rather than openness, which frees your
+# fingers for the octave and drive switches. Tilt your palm up and down like a
+# real wah treadle.
+#
+#   python run.py -c lead
+
+extends: default.yaml
+name: lead
+
+audio:
+  blocksize: 128
+  output_gain_db: -6.0
+
+vision:
+  smoothing: 0.25
+
+chain:
+  - type: gate
+    threshold_db: -50       # a gate earns its keep at this much gain
+    hold_ms: 70
+
+  - type: octaver
+    dry: 1.0
+    down: 0.0               # fist brings the octave in
+    up: 0.0
+    track_hz: 800
+
+  - type: drive
+    gain_db: 24
+    tone: 0.55
+    level: 0.45
+    shape: tube
+    asym: 0.12
+
+  - type: wah
+    freq: 750
+    q: 5.0
+    mix: 1.0
+
+  - type: eq3
+    low_db: -2
+    mid_db: 3
+    high_db: 1
+    mid_freq: 900
+
+  - type: delay
+    time_ms: 130            # slapback
+    feedback: 0.22
+    mix: 0.18
+    damping: 0.5
+
+  - type: reverb
+    size: 0.55
+    damping: 0.6
+    mix: 0.14
+
+  - type: volume
+    gain: 1.0
+
+mappings:
+  # Tilt your palm like a wah treadle.
+  - source: tilt
+    target: wah.freq
+    lo: 350
+    hi: 2400
+    scale: log
+    curve: scurve
+
+  # Spread your fingers for more gain.
+  - source: spread
+    target: drive.gain_db
+    lo: 14
+    hi: 36
+    curve: scurve
+
+  # Pinch to back the volume off for a clean passage.
+  - source: pinch
+    target: volume.gain
+    lo: 0.35
+    hi: 1.2
+    curve: sqrt
+
+  # Fist drops the octave in underneath.
+  - source: pose_fist
+    target: octaver.down
+    lo: 0.0
+    hi: 0.85
+    mode: toggle
+
+  # Point to open the delay up into a longer repeat.
+  - source: pose_point
+    target: delay.mix
+    lo: 0.18
+    hi: 0.42
+    mode: toggle
