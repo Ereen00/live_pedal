@@ -15,10 +15,12 @@ still decaying retriggers it, instead of only the first note out of silence.
 chord tone times the unison count. Phases persist across chord changes, so
 swapping the chord rewrites the frequencies without a click.
 
-**The envelope** is started by the onset and held up by the guitar still
-ringing. When the guitar goes quiet, an exponential release takes over -- long
-by default, because the whole point is that the chord thins out rather than
-being switched off.
+**The envelope** is started by the onset, and then two things hold it up. An
+ADSR gives it a shape of its own, and ``follow`` scales that shape by how loud
+the guitar actually is. With follow high the chord is a shadow of what you
+played -- it comes up with the note and dies with it, no tail of its own -- and
+turning it down lets the pad outlive the note by ``release_ms`` instead. Either
+way it fades rather than switching off.
 """
 
 from __future__ import annotations
@@ -79,19 +81,33 @@ class ChordPad(Effect):
     PARAMS = (
         # Which chord is armed. Discrete: never interpolate between chords.
         ParamSpec("chord", 0.0, 0.0, 15.0, smooth_ms=0.0),
-        ParamSpec("level", 0.35, 0.0, 1.5, smooth_ms=40.0),
+        ParamSpec("level", 0.22, 0.0, 1.5, smooth_ms=40.0),
 
         # Envelope. The long release is the character of the whole thing.
         ParamSpec("attack_ms", 70.0, 1.0, 3000.0, smooth_ms=0.0, unit="ms"),
         ParamSpec("decay_ms", 400.0, 10.0, 4000.0, smooth_ms=0.0, unit="ms"),
         ParamSpec("sustain", 0.75, 0.0, 1.0, smooth_ms=0.0),
-        ParamSpec("release_ms", 1800.0, 50.0, 12000.0, smooth_ms=0.0, unit="ms"),
+        ParamSpec("release_ms", 600.0, 50.0, 12000.0, smooth_ms=0.0, unit="ms"),
 
         # Triggering.
         ParamSpec("threshold_db", -34.0, -70.0, -6.0, smooth_ms=0.0, unit="dB"),
-        ParamSpec("sensitivity", 1.6, 1.05, 6.0, smooth_ms=0.0),
+        # How much louder than the moment before counts as a new note. 1.0
+        # would fire constantly; much above 1.15 only hears the first note of
+        # a run. See onset_detect for why the useful range is this narrow.
+        ParamSpec("sensitivity", 1.10, 1.02, 2.0, smooth_ms=0.0),
         ParamSpec("retrigger_ms", 180.0, 20.0, 2000.0, smooth_ms=0.0, unit="ms"),
         ParamSpec("hold_db", -46.0, -80.0, -12.0, smooth_ms=0.0, unit="dB"),
+
+        # How much the pad's loudness tracks the guitar's, rather than sitting
+        # at the envelope's sustain level. At 1 the chord is a shadow of what
+        # you played: it dies as the note dies, with no separate tail of its
+        # own. At 0 it is a plain ADSR and outlives the note by release_ms.
+        ParamSpec("follow", 0.75, 0.0, 1.0, smooth_ms=0.0),
+        # The guitar level at which following reaches full volume. Set this
+        # near how loud you actually play: put it far below and the pad sits
+        # at full for most of the note and only thins out at the very end,
+        # which defeats the point.
+        ParamSpec("follow_db", -14.0, -40.0, 0.0, smooth_ms=0.0, unit="dB"),
 
         # Tone.
         ParamSpec("cutoff", 2200.0, 150.0, 14000.0, smooth_ms=30.0,
@@ -103,8 +119,10 @@ class ChordPad(Effect):
         ParamSpec("octave", 0.0, -2.0, 2.0, smooth_ms=0.0),
 
         # 1 = a new gesture takes effect at the next note you play, so the
-        # chord never changes underneath a ringing pad. 0 = change immediately.
-        ParamSpec("change_on_trigger", 1.0, 0.0, 1.0, smooth_ms=0.0),
+        # chord never changes underneath a ringing pad. 0 = change immediately,
+        # which is what you want while you are learning the gestures: you can
+        # hear whether the camera saw you without having to play anything.
+        ParamSpec("change_on_trigger", 0.0, 0.0, 1.0, smooth_ms=0.0),
     )
 
     def __init__(self, name=None, setup=None, **overrides):
@@ -150,21 +168,25 @@ class ChordPad(Effect):
         self._env = np.zeros(block, dtype=np.float64)
         self._env_state = np.zeros(2, dtype=np.float64)
         self._onset_state = np.zeros(3, dtype=np.float64)
+        self._loudness_state = np.zeros(1, dtype=np.float64)
         self._filter_state = np.zeros(2, dtype=np.float64)
         self._level_state = np.zeros(1, dtype=np.float64)
 
         self._n_voices = 0
         self._active_chord = -1
         self._voicing = None
+        self._follow_gain = 0.0
         self._rebuild(0)
 
     def reset(self) -> None:
         self._env_state[:] = 0.0
         self._onset_state[:] = 0.0
+        self._loudness_state[:] = 0.0
         self._filter_state[:] = 0.0
         self._level_state[:] = 0.0
         self._synth[:] = 0.0
         self._env[:] = 0.0
+        self._follow_gain = 0.0
 
     # ------------------------------------------------------------------
 
@@ -194,17 +216,29 @@ class ChordPad(Effect):
         """Per-sample coefficient for a time constant in milliseconds."""
         return float(1.0 - np.exp(-1.0 / max(self.sr * ms * 0.001, 1.0)))
 
+    def _ret(self, ms: float) -> float:
+        """Retention coefficient, the form ``envelope`` wants."""
+        return float(np.exp(-1.0 / max(self.sr * ms * 0.001, 1.0)))
+
     def process(self, x: np.ndarray, y: np.ndarray) -> None:
         # --- did the player just strike a note? ---------------------------
         fired = K.onset_detect(
             x,
             db_to_lin(self._v("threshold_db")),
             self._coef(4.0),                       # fast envelope, 4 ms
-            self._coef(180.0),                     # slow envelope, 180 ms
+            self._coef(25.0),                      # baseline, 25 ms
             self._v("sensitivity"),
             self._v("retrigger_ms") * 0.001 * self.sr,
             self._onset_state,
         )
+
+        # --- and how loud is it right now? ---------------------------------
+        # A separate follower rather than one of the detector's, because the
+        # two want opposite things: the detector needs a baseline fast enough
+        # to notice a rise, and this needs a release slow enough that the pad
+        # thins out rather than being switched off with the string.
+        loudness = K.envelope(x, self._ret(8.0), self._ret(250.0),
+                              self._loudness_state)
 
         # --- has a different chord been armed by a gesture? ----------------
         wanted = int(min(max(round(self._v("chord")), 0), len(self.chords) - 1))
@@ -221,6 +255,16 @@ class ChordPad(Effect):
         ):
             self._rebuild(wanted if (fired > 0.5 or immediate) else self._active_chord)
 
+        # --- scale the pad by how loud the guitar is ------------------------
+        # Per-block resolution is plenty: at 256 samples the gain steps every
+        # 5 ms and is ramped across the block anyway.
+        follow = self._v("follow")
+        ref = db_to_lin(self._v("follow_db"))
+        tracked = min(loudness / ref, 1.0) if ref > 0.0 else 1.0
+        gain_a = self._follow_gain
+        gain_b = (1.0 - follow) + follow * tracked
+        self._follow_gain = gain_b
+
         # --- nothing sounding and nothing triggering: do no work -----------
         # Checked *before* running the envelope, because if the release had
         # finished mid-block the tail would still be in this block's envelope
@@ -230,9 +274,7 @@ class ChordPad(Effect):
             return
 
         # --- envelope ------------------------------------------------------
-        # The slow envelope is the honest measure of "is the guitar still
-        # ringing"; the fast one dips between picks and would drop the pad.
-        gate_on = 1.0 if self._onset_state[1] > db_to_lin(self._v("hold_db")) else 0.0
+        gate_on = 1.0 if loudness > db_to_lin(self._v("hold_db")) else 0.0
 
         atk = self._v("attack_ms") * 0.001 * self.sr
         dec = self._v("decay_ms") * 0.001 * self.sr
@@ -264,7 +306,7 @@ class ChordPad(Effect):
         )
 
         la, lb = self._ab("level")
-        K.mix_env(y, x, self._synth, self._env, la, lb)
+        K.mix_env(y, x, self._synth, self._env, la * gain_a, lb * gain_b)
 
     def warmup_hook(self, x: np.ndarray, y: np.ndarray) -> None:
         """Drive the synthesis path even though no note has been played.

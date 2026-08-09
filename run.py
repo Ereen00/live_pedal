@@ -177,6 +177,10 @@ def main(argv=None) -> int:
             return 2
         print("chain:")
         print(chain.describe())
+        for fx in chain.effects:
+            if getattr(fx, "chord_names", None):
+                print(f"\nchords ({fx.name}):")
+                print(fx.describe_chords())
         print("\nmappings:")
         print(mapper.describe())
         for w in mapper.warnings:
@@ -232,10 +236,19 @@ def main(argv=None) -> int:
                 )
                 return 4
 
+            # Chord names live with the effect, but the label has to be drawn
+            # by the process that owns the window. Ship the plain strings.
+            chord_labels = {
+                f"{fx.name}.chord": list(fx.chord_names)
+                for fx in engine.chain.effects
+                if getattr(fx, "chord_names", None)
+            }
+
             vision_proc = mp.Process(
                 target=run_vision,
                 args=(cfg.vision, layout, cfg.mappings,
-                      target_chan.name, display_chan.name, str(model)),
+                      target_chan.name, display_chan.name, str(model),
+                      chord_labels),
                 daemon=True,
                 name="live_pedal-vision",
             )

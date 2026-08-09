@@ -48,6 +48,7 @@ def run_vision(
     target_name: str,
     display_name: str,
     model_path: str,
+    chord_labels: dict[str, list[str]] | None = None,
 ) -> None:
     """Child process entry point. Never raises into the parent; reports and exits."""
     target = None
@@ -76,7 +77,8 @@ def run_vision(
             print("             low frame rate limits how fast gestures track. "
                   "More light, or a more negative 'exposure', will help.")
 
-        _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout)
+        _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout,
+              chord_labels or {})
 
     except Exception:
         print("\n--- vision process failed ---")
@@ -90,9 +92,21 @@ def run_vision(
             target.set_flag(FLAG_QUIT)
 
 
-def _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout) -> None:
+def _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout,
+          chord_labels) -> None:
     n = len(layout)
     display_values = np.array(layout.defaults, dtype=np.float64)
+
+    # Chord selectors, so the window and the console can name what a gesture
+    # just chose. Without this, "did the camera see me?" and "is the chord
+    # wrong?" look identical from where you are standing, holding a guitar.
+    chord_slots = [
+        (layout.index_of(name), labels)
+        for name, labels in chord_labels.items()
+        if name in layout.names
+    ]
+    last_chord: list[int] = [-1] * len(chord_slots)
+    warned_handedness = False
 
     # Only show parameters something can actually change, plus every enable
     # switch. A full dump of 80 numbers is unreadable while you are playing.
@@ -134,6 +148,16 @@ def _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout) -> Non
         hands = tracker.detect(rgb, int((now - t_start) * 1000.0))
         hand = select_hand(hands, vcfg.hand)
 
+        # A hand in frame that the config refuses to use looks exactly like no
+        # hand at all, and it is a very easy way to spend an evening waving at
+        # a camera that is deliberately ignoring you.
+        if hands and hand is None and not warned_handedness:
+            warned_handedness = True
+            seen = ", ".join(sorted({h.label for h in hands}))
+            print(f"\n  note: tracking a {seen} hand but the preset asks for "
+                  f"'{vcfg.hand}', so gestures are being ignored.\n"
+                  f"        Use the other hand, or set vision.hand: any.")
+
         if hand is not None:
             features = extractor.extract(
                 hand.image_lm, hand.world_lm, aspect, now, fps
@@ -144,6 +168,17 @@ def _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout) -> Non
         hold = bool(target.flags & FLAG_HOLD)
         targets = mapper.update(features, hold=hold)
         target.write(targets)
+
+        # Report chord changes on the console too: it is the only feedback
+        # there is with --no-window, and it confirms the gesture registered
+        # even when the pad happens to be silent.
+        current_chord = ""
+        for slot, (idx, labels) in enumerate(chord_slots):
+            value = int(min(max(round(targets[idx]), 0), len(labels) - 1))
+            current_chord = labels[value]
+            if value != last_chord[slot]:
+                last_chord[slot] = value
+                print(f"\n  chord -> {labels[value]}")
 
         if not show:
             continue
@@ -161,6 +196,9 @@ def _loop(vcfg, cam, tracker, extractor, mapper, target, display, layout) -> Non
             label = hand.label
             cv2.putText(view, f"{label} hand  {hand.score:.2f}", (10, h - 12),
                         overlay.FONT, 0.45, overlay.GOOD, 1, cv2.LINE_AA)
+
+        if current_chord:
+            overlay.draw_chord(view, current_chord)
 
         flags = target.flags
         status = {

@@ -4,8 +4,12 @@ A guitar effects processor you play with your hands.
 
 Guitar goes into your audio interface. The signal is processed live and comes
 straight back out. While you play with one hand, the other hand moves in front
-of the webcam and shapes the sound — open your palm and the wah sweeps up, raise
-your hand and the volume swells, make a fist and the overdrive kicks in.
+of the webcam and shapes the sound.
+
+The default rig is an 8-bit one: the guitar is squared into a pulse wave and
+crushed down to four bits, bone dry — no reverb, no delay, nothing spatial. Your
+free hand picks a chord, and that chord appears underneath the note you play and
+dies with it.
 
 No DAW, no plugin host, no MIDI controller. One command.
 
@@ -18,10 +22,10 @@ python run.py
 ## What it actually does
 
 ```
-  guitar ──► audio interface ──► [ gate ─► drive ─► wah ─► delay ─► reverb ─► volume ] ──► speakers
-                                              ▲
-                                              │  parameter targets (shared memory)
-                                              │
+  guitar ──► audio interface ──► [ gate ─► chiptune ─► chordpad ─► volume ] ──► speakers
+                                                ▲
+                                                │  parameter targets (shared memory)
+                                                │
   webcam ──► hand landmarks ──► gesture features ──► mapping rules
 ```
 
@@ -93,6 +97,7 @@ python tools/test_output.py --sweep  # beep each output: which can you hear?
 python run.py --dry-run              # validate config, print the rig
 python tests/test_gestures.py        # gesture maths self-test
 python tests/test_chordpad.py        # chord pad self-test
+python tests/test_chiptune.py        # 8-bit voice self-test
 python tools/bench_dsp.py            # DSP benchmark and sanity check
 ```
 
@@ -191,12 +196,32 @@ all of them live as bars, so you can see exactly what your hand is producing.
 | `speed` | how fast the hand is moving |
 | `present` | 1 while a hand is tracked |
 
-| Discrete poses | |
+| Discrete poses | Fingers |
 |---|---|
-| `pose_fist`, `pose_open`, `pose_point`, `pose_peace`, `pose_ok`, `pose_thumbup` | |
+| `pose_fist` | none up, thumb tucked |
+| `pose_thumbup` | none up, thumb out |
+| `pose_point` | index only |
+| `pose_peace` | index and middle |
+| `pose_open` | index plus at least two more |
+| `pose_ok` | thumb and index touching, the rest up |
 
-Poses need three consistent frames before they fire, so a hand passing through a
-shape on its way somewhere else does not trigger anything.
+Poses are decided by asking which fingers are up and then reading the pattern,
+rather than by testing every curl against one tight window. That matters in
+practice: a pinky that only ever half-straightens still counts as up, where a
+scheme demanding all four fingers below a single strict number would simply
+never see an open hand. Each finger's up/down decision has a wide hysteresis
+gap, so one hovering near the boundary cannot chatter.
+
+The six are **mutually exclusive** — no two can be true at once — which is what
+lets four of them latch the same parameter without fighting over it.
+
+Poses also need three consistent frames before they fire, so a hand passing
+through a shape on its way somewhere else does not trigger anything.
+
+If the chord never changes, the most common cause is `vision.hand`. Set to
+`right` or `left`, a hand the tracker labels the other way is ignored entirely
+and looks exactly like no hand at all; the console says so when it happens.
+`hand: any` uses whichever hand is in frame.
 
 **When the tracked hand leaves the frame, every parameter freezes where it is.**
 You can drop your hand to the strings and the tone stays put.
@@ -207,6 +232,7 @@ You can drop your hand to the strings and the tone stays put.
 
 | | |
 |---|---|
+| `chiptune` | 8-bit voice: pulse wave, bit crusher, downsampler, pluck — see below |
 | `chordpad` | gesture-selected chord synth, triggered by playing — see below |
 | `gate` | noise gate with hold |
 | `drive` | overdrive/distortion/fuzz, 5 curves, 4× oversampled |
@@ -238,38 +264,84 @@ Two notes worth knowing before you build a chain:
 
 ---
 
+## The 8-bit voice
+
+`chiptune` is the only effect on the guitar in the default rig, and it is
+deliberately dry — there is nothing spatial anywhere in it. Four stages:
+
+| Stage | Parameters | What it does |
+|---|---|---|
+| Square | `square`, `pulse_width` | Replaces the waveform with a pulse of the same amplitude. `square: 0` leaves the guitar alone, `1` is a pure pulse. `pulse_width` off 0.5 gives the thin, nasal duty-cycle tone. |
+| Crush | `bits`, `crush_hz` | Quantises to `2**(bits-1)` steps and holds each sample. The aliasing is the effect, so it is left unfiltered. |
+| Tone | `tone` | One pole of lowpass, to stop the aliasing getting shrill. |
+| Pluck | `pluck`, `decay_ms` | A short envelope restarted by every note. This is what makes it read as chiptune rather than as a broken amp: a console voice has no sustain. |
+
+The pulse tracks the note's envelope rather than being a constant buzz, so your
+picking dynamics survive.
+
+| If | Change |
+|---|---|
+| Too clean, not retro enough | Lower `bits` to 3, lower `crush_hz` to 4000 |
+| Too harsh | Raise `bits`, lower `tone` |
+| Notes cut off too fast | Raise `decay_ms`, or lower `pluck` |
+| Notes ring like a normal guitar | Raise `pluck` toward 1, lower `decay_ms` |
+| You want the real guitar back underneath | Lower `mix` below 1 |
+
+---
+
 ## The chord pad
 
 The default rig uses gestures for one thing: choosing a chord. It is not a
 background drone — **nothing sounds until you actually strike a string.** The
-chord then swells in underneath what you played, holds while the note rings, and
-fades out over a couple of seconds when you stop.
+chord then comes in underneath what you played and fades away as the note does.
 
 | Gesture | Chord |
 |---|---|
-| Open hand, five fingers | **Em** |
+| Open hand (three or more fingers up) | **Em** |
 | Fist | **E** |
 | Index finger up | **Fm** |
 | Two fingers (peace) | **B7b9** |
 
+The chord's name is drawn large on the camera window. If it is not changing,
+look there first — it tells you immediately whether the camera saw the gesture
+or the chord itself is the problem.
+
 The choice **latches**: drop your hand and the chord stays selected until you
-make a different gesture. And a new gesture takes effect *at the next note you
-play*, not immediately, so the chord never changes underneath a pad that is
-still ringing (`change_on_trigger: 0` if you want it instant).
+make a different gesture. By default a new gesture takes effect immediately, so
+you can hear the camera register it without playing; set `change_on_trigger: 1`
+and it waits for your next note instead, which never changes the chord
+underneath a pad that is still ringing.
 
 ### How it decides you played a note
 
-A fast envelope of the guitar is compared against a slow one, so it detects the
-*rise* rather than the level — which means a note played while the pad is still
-decaying retriggers it, not just the first note out of silence.
+A fast envelope of the guitar is compared against a slower baseline, so it
+detects the *rise* rather than the level — which means a note played while the
+pad is still decaying retriggers it, not just the first note out of silence.
+
+`sensitivity` is how much louder than the moment before counts as a new note,
+and useful values are small. A note picked 130 ms after the last one has only
+decayed to about 0.7 of its level, so the rise the detector sees is on the order
+of 10 percent; anything much above `1.15` hears the first note of a fast run and
+nothing after it.
+
+### How it stops
+
+`follow` scales the pad by how loud the guitar actually is. At `0.85` the chord
+is a shadow of the note — it comes up with it and goes down with it, no tail of
+its own. Turn it down and the pad gets a life of its own, outliving the note by
+`release_ms`. Set `follow_db` near how hard you actually play; put it far below
+and the pad sits at full volume for most of the note and only thins out at the
+very end, which defeats the purpose.
 
 | If | Change |
 |---|---|
 | It triggers on finger noise | Raise `threshold_db` toward `-28` |
-| It misses quiet notes | Lower `threshold_db` toward `-42` |
+| It misses quiet notes | Lower `threshold_db` toward `-46` |
+| It misses notes in a fast run | Lower `sensitivity` toward `1.05` |
 | One pick stroke fires it twice | Raise `retrigger_ms` |
-| The pad drops out while you are still ringing | Lower `hold_db` |
-| The fade is too long / too short | `release_ms` (2200 = about 2.2 s) |
+| The chord hangs around too long | Raise `follow`, or lower `release_ms` |
+| The chord dies before the note does | Lower `follow`, or lower `follow_db` |
+| The chord drowns the guitar | Lower `level` |
 
 ### Changing the chords
 

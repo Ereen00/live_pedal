@@ -1,8 +1,10 @@
-# The smallest, fastest rig: only what a gesture actually touches.
+# Ayni rig, yarim gecikme.
 #
-# Fewer effects is not the point -- 128-sample blocks are. Halving the block
-# size halves the buffering latency, and a short chain leaves enough headroom
-# that the smaller deadline is never in danger.
+# Efektler ayni -- degisen tek sey blok boyutu. 256 yerine 128 ornek,
+# yani tamponlama gecikmesi yariya iniyor. Zincir zaten kisa oldugu
+# icin (gate + chiptune + chordpad) kucuk blokta bile bol yer var.
+#
+# Ses cizilirsa/citlarsa default'a don: python run.py
 #
 #   python run.py -c lowlatency
 
@@ -13,32 +15,55 @@ audio:
   blocksize: 128            # 2.67 ms per block
 
 vision:
-  smoothing: 0.2            # less averaging: twitchier, but tracks faster
+  smoothing: 0.2            # daha az yumusatma: daha hizli, biraz daha titrek
 
 chain:
   - type: gate
-    threshold_db: -58
-    hold_ms: 60
+    threshold_db: -55
+    hold_ms: 80
 
-  - type: wah
-    freq: 700
-    q: 4.5
+  - type: chiptune
+    square: 0.85
+    pulse_width: 0.5
+    bits: 4
+    crush_hz: 6000
+    tone: 7000
+    pluck: 0.7
+    decay_ms: 400
+    attack_ms: 3
+    threshold_db: -40
+    sensitivity: 1.10
+    retrigger_ms: 70
+    level: 1.0
     mix: 1.0
+
+  - type: chordpad
+    level: 0.22
+    chords:
+      - name: Em
+        notes: [E2, B2, E3, G3,  B3]
+      - name: E
+        notes: [E2, B2, E3, G#3, B3]
+      - name: Fm
+        notes: [F2, C3, F3, Ab3, C4]
+      - name: B7b9
+        notes: [B2, D#3, F#3, A3, C4]
+    follow: 0.85
+    follow_db: -14
+    attack_ms: 35
+    decay_ms: 250
+    sustain: 0.75
+    release_ms: 500
+    threshold_db: -34
+    sensitivity: 1.10
+    retrigger_ms: 180
+    hold_db: -40
+    wave: square
+    unison: 1
+    detune: 0
+    cutoff: 3000
+    resonance: 0.9
+    change_on_trigger: 0
 
   - type: volume
     gain: 1.0
-
-mappings:
-  - source: openness
-    target: wah.freq
-    lo: 300
-    hi: 2800
-    scale: log
-    curve: scurve
-
-  - source: y
-    target: volume.gain
-    lo: 0.0
-    hi: 1.3
-    invert: true
-    curve: square

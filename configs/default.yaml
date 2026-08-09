@@ -1,16 +1,21 @@
 # =====================================================================
-# live_pedal -- default rig: gesture-selected chords
+# live_pedal -- default rig: 8-bit gitar + el hareketiyle secilen akor
 #
-# El hareketleri artik SADECE akor seciyor. Bir akor sectiginde,
-# sen yeni bir hareket yapana kadar o akor secili kalir.
+# GITAR TONU: tamamen kuru. Reverb yok, delay yok, hicbir uzamsal
+# efekt yok. Tek efekt var: chiptune (square/pulse + bitcrusher +
+# downsampler + kisa pluck zarfi).
 #
-# Akor arkada surekli calmaz. Gitarda bir notaya bastiginda arkadan
-# gelir, sen calmayi biraktiginda yavasca soner.
+# AKOR: arkada surekli calmaz. Bir notaya bastiginda gelir, sen
+# susunca o da suser (follow). El hareketi hangi akor oldugunu secer
+# ve sen yeni bir hareket yapana kadar o akor secili kalir.
 #
-#   Acik el (5 parmak)   -> Em
-#   Yumruk               -> E
-#   Isaret parmagi       -> Fm
-#   Iki parmak (peace)   -> B7b9
+#   Acik el (3-5 parmak)  -> Em
+#   Yumruk                -> E
+#   Isaret parmagi        -> Fm
+#   Iki parmak (peace)    -> B7b9
+#
+# Kamera penceresinde secili akorun adi buyuk harflerle yazar.
+# Degismiyorsa once oraya bak: hareket algilanmiyor demektir.
 #
 # Kontrol:   python run.py --dry-run     (kontrol et, donanima dokunma)
 # Calistir:  run.bat
@@ -40,6 +45,10 @@ vision:
   height: 480
   fps: 60
   exposure: -6
+
+  # 'any' = hangi el gorunuyorsa onu kullanir. 'right'/'left' yaparsan
+  # MediaPipe o eli bulamazsa hicbir hareket calismaz -- akorlarin hic
+  # degismemesinin en sik sebebi budur.
   hand: right
   mirror: true
   show_window: true
@@ -52,33 +61,49 @@ vision:
 # ---------------------------------------------------------------------
 # SES ZINCIRI
 #
-# Buradaki degerler artik SABIT tondur -- istedigin "her zaman ayni
-# efekt" karakteri bu. El hareketleri bunlara dokunmuyor, sadece akoru
-# seciyor.
-#
-# Sira onemli: chordpad drive'dan SONRA geliyor, yani gitar distortion
-# yiyor ama akor pad'i yemiyor. Bes sesli bir akoru distortion'a
-# sokarsan camur olur.
+# Sadece uc sey var: kapi, chiptune, akor. Bilerek bu kadar az.
 # ---------------------------------------------------------------------
 chain:
 
-  # Gitar sinyalini temizle. Bu ayni zamanda pad'in tetiklenmesini de
-  # temizler: parmak/tel gurultusu akoru tetiklemesin.
+  # Gitar sinyalini temizle. Bu ayni zamanda hem chiptune'un hem de
+  # akorun tetiklenmesini temizler: parmak/tel gurultusu tetiklemesin.
   - type: gate
     threshold_db: -55
     hold_ms: 80
 
-  # Gitara hafif bir kenar. Techno icin cok sert olmasin diye 'soft'.
-  - type: drive
-    gain_db: 13
-    tone: 0.5
-    level: 0.5
-    shape: soft
+  # ---- TEK GITAR EFEKTI: 8-BIT ------------------------------------
+  # Notalarin uzerinde duyacagin sey bu. Tamamen kuru.
+  - type: chiptune
+
+    # square: 0 = gitarin kendi dalgasi, 1 = saf pulse wave.
+    # 0.85 gitarin tirnak/tel karakterinden biraz birakiyor.
+    square: 0.85
+    pulse_width: 0.5       # 0.5 = kare. 0.25 veya 0.75 = daha ince, genizden
+
+    # Cozunurluk dusurme. Asil "eski oyun" sesi burada.
+    bits: 4                # bit derinligi: 3 = cok kaba, 8 = temiz
+    crush_hz: 6000         # ornekleme hizi: dusurdukce daha cok aliasing
+
+    tone: 7000             # en tiz aliasing'i biraz kessin diye
+
+    # Kisa pluck zarfi: nota vurulur ve biter, uzamaz.
+    pluck: 0.7             # 0 = kapali, 1 = tamamen sustain'siz
+    decay_ms: 400          # kisalt = daha staccato, uzat = daha akici
+    attack_ms: 3
+
+    # Neyin "yeni nota" sayildigi.
+    threshold_db: -40
+    sensitivity: 1.10
+    retrigger_ms: 80
+
+    level: 1.0
+    mix: 1.0               # 1.0 = tamamen 8-bit, dusurursen temiz gitar karisir
 
   # ---- AKOR PAD'I -------------------------------------------------
-  # Nota calindiginda tetiklenir, sen susunca yavasca soner.
+  # Nota calindiginda tetiklenir, sen susunca soner.
+  # (Akorlarin efektini sonra soyleyeceksin; simdilik sade.)
   - type: chordpad
-    level: 0.40
+    level: 0.22            # gitardan yuksek olmasin diye dusuk
 
     chords:
       - name: Em
@@ -90,60 +115,34 @@ chain:
       - name: B7b9
         notes: [B2, D#3, F#3, A3, C4]
 
-    # Zarf. release_ms senin "birden kesilmesin, yavasca kesilsin"
-    # istegin -- 2.2 saniyede tamamen soner.
-    attack_ms: 60          # ani girmesin, hafifce sisip gelsin
-    decay_ms: 500
-    sustain: 0.80
-    release_ms: 2200
+    # follow = akorun sesi gitarin sesini takip eder. 0.85'te akor
+    # notanin golgesi gibi davranir: nota susunca akor da suser.
+    # Dusurursen akorun kendi kuyrugu olur (release_ms kadar surer).
+    follow: 0.85
+    follow_db: -14
 
-    # Tetikleme. threshold_db'yi yukselt (-30) = daha zor tetiklenir,
-    # dusur (-40) = daha hassas. retrigger_ms iki tetikleme arasi
-    # minimum sure: tek vurus iki kere tetiklemesin diye.
+    attack_ms: 35
+    decay_ms: 250
+    sustain: 0.75
+    release_ms: 500        # follow ile birlikte ~yarim saniyede biter
+
     threshold_db: -34
-    sensitivity: 1.6
+    sensitivity: 1.10
     retrigger_ms: 180
-    hold_db: -46           # bunun altina dusunce "gitar sustu" sayilir
+    hold_db: -40
 
-    # Ton: techno icin detune'lu supersaw, filtreli.
-    wave: saw
-    unison: 3
-    detune: 12
-    cutoff: 2400
-    resonance: 1.4
+    # Ton: 8-bit temaya uysun diye kare dalga, tek ses, filtreli.
+    wave: square
+    unison: 1
+    detune: 0
+    cutoff: 3000
+    resonance: 0.9
     octave: 0
 
-    # 1 = yeni akor, bir sonraki caldigin notada devreye girer.
-    # Boylece calan bir pad'in altindan akor degismez.
-    change_on_trigger: 1
-
-  # ---- SABIT TON KARAKTERI ----------------------------------------
-  # Buradan asagisi hem gitara hem akora ayni sekilde uygulanir.
-
-  # Wah artik el hareketiyle degil, sabit bir renk olarak duruyor.
-  # (Eskiden avuc acikligi bunu suruyordu; poz secimiyle cakisiyordu.)
-  - type: wah
-    freq: 900
-    q: 2.5
-    mix: 0.35
-
-  - type: chorus
-    rate: 0.4
-    depth_ms: 3.5
-    delay_ms: 20
-    mix: 0.28
-
-  - type: delay
-    time_ms: 300           # ~100 BPM'de sekizlik
-    feedback: 0.42
-    mix: 0.26
-    damping: 0.5
-
-  - type: reverb
-    size: 0.80
-    damping: 0.45
-    mix: 0.22
-    predelay_ms: 20
+    # 0 = el hareketini yapar yapmaz akor degisir. Ogrenirken bu lazim:
+    # calmadan da degistigini duyabilirsin. 1 yaparsan yeni akor bir
+    # sonraki caldigin notada devreye girer.
+    change_on_trigger: 0
 
   - type: volume
     gain: 1.0
@@ -154,12 +153,17 @@ chain:
 # mode: latch  -> hareketi yapinca deger bir kez yazilir ve orada kalir.
 # Elini indirsen de akor degismez; ancak baska bir poz yapinca degisir.
 #
-# Baska pozlar da var: pose_ok (bas+isaret halka), pose_thumbup.
-# Bir pozu begenmezsen source satirini degistirmen yeterli.
+# Pozlar birbirini disliyor: ayni anda ikisi birden algilanmaz.
+#   pose_fist     yumruk, basparmak da kapali
+#   pose_thumbup  yumruk ama basparmak yukarida
+#   pose_point    sadece isaret parmagi
+#   pose_peace    isaret + orta
+#   pose_open     isaret dahil en az uc parmak acik
+#   pose_ok       basparmak ve isaret halka, digerleri acik
 # ---------------------------------------------------------------------
 mappings:
 
-  # Acik el (bes parmak acik)  -> Em
+  # Acik el  -> Em
   - source: pose_open
     target: chordpad.chord
     hi: 0

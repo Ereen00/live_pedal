@@ -51,6 +51,19 @@ SPREAD_MIN = 0.70       # index to pinky tip, fingers together
 SPREAD_MAX = 2.10
 SPEED_FULL = 2.5        # frame-widths per second that reads as "fast"
 
+# A finger is either up or down; nothing in between is useful for choosing a
+# chord. These two thresholds decide which, with a wide gap between them so a
+# finger hovering near the boundary cannot flicker. Crossing EXTEND_ON marks it
+# up and it stays up until it crosses all the way back past EXTEND_OFF.
+#
+# Deciding per finger and then reading the *pattern* is much more forgiving
+# than testing every curl against a tight window at once: a pinky that only
+# ever half-straightens still reads as up, where a scheme demanding all four
+# fingers below one strict number would simply never see an open hand.
+EXTEND_ON = 0.42
+EXTEND_OFF = 0.62
+FOUR = ("index", "middle", "ring", "pinky")
+
 
 def _clamp01(v: float) -> float:
     return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
@@ -79,6 +92,7 @@ class FeatureExtractor:
         self._prev_xy = np.zeros(2, dtype=np.float64)
         self._prev_t: float | None = None
         self._pose_counts: dict[str, int] = {}
+        self._extended: dict[str, bool] = {name: False for name in FINGERS}
 
         # Features that must never be smoothed: booleans and diagnostics.
         self._discrete = {
@@ -93,6 +107,8 @@ class FeatureExtractor:
         self._have_history = False
         self._prev_t = None
         self._pose_counts.clear()
+        for name in self._extended:
+            self._extended[name] = False
 
     def no_hand(self, fps: float) -> np.ndarray:
         """Emit a vector for "nothing detected", holding shape values steady.
@@ -215,20 +231,33 @@ class FeatureExtractor:
 
     def _classify(self, v: np.ndarray) -> None:
         f = FEATURE_INDEX
-        c_t = v[f["curl_thumb"]]
-        c_i = v[f["curl_index"]]
-        c_m = v[f["curl_middle"]]
-        c_r = v[f["curl_ring"]]
-        c_p = v[f["curl_pinky"]]
         pinch = v[f["pinch"]]
 
+        # First decide, with hysteresis, which fingers are up.
+        for name in FINGERS:
+            curl = float(v[f[f"curl_{name}"]])
+            if self._extended[name]:
+                if curl > EXTEND_OFF:
+                    self._extended[name] = False
+            elif curl < EXTEND_ON:
+                self._extended[name] = True
+
+        e = self._extended
+        up = sum(1 for name in FOUR if e[name])
+
+        # Then read the pattern. These six are mutually exclusive by
+        # construction -- no two can be true at once -- which is what lets
+        # several of them latch the same parameter without fighting.
         candidates = {
-            "pose_fist": c_i > 0.7 and c_m > 0.7 and c_r > 0.7 and c_p > 0.7,
-            "pose_open": c_i < 0.3 and c_m < 0.3 and c_r < 0.3 and c_p < 0.3,
-            "pose_point": c_i < 0.3 and c_m > 0.6 and c_r > 0.6 and c_p > 0.6,
-            "pose_peace": c_i < 0.3 and c_m < 0.35 and c_r > 0.6 and c_p > 0.6,
-            "pose_ok": pinch < 0.15 and c_m < 0.4 and c_r < 0.45,
-            "pose_thumbup": c_t < 0.35 and c_i > 0.7 and c_m > 0.7 and c_p > 0.7,
+            "pose_fist": up == 0 and not e["thumb"],
+            "pose_thumbup": up == 0 and e["thumb"],
+            "pose_point": up == 1 and e["index"],
+            "pose_peace": up == 2 and e["index"] and e["middle"],
+            # Three or four counts as an open hand: the pinky is the finger
+            # people straighten least, and losing it should not cost the pose.
+            "pose_open": up >= 3 and e["index"],
+            # The OK ring: index folded down to meet the thumb, rest up.
+            "pose_ok": pinch < 0.18 and not e["index"] and up >= 2,
         }
 
         # Require the same answer for a few consecutive frames before acting.

@@ -730,6 +730,20 @@ def onset_detect(x, thresh, fast_c, slow_c, ratio, refractory, state):
     fingering noise, and the refractory count stops one pick stroke firing
     several times as the string settles.
 
+    The slow envelope averages the *fast envelope*, not the rectified signal,
+    and that detail is load-bearing. A peak follower on a steady sine settles
+    at its amplitude while a mean follower settles at 0.64 of it, so comparing
+    one against the other leaves a permanent ratio of about 1.56 between them
+    -- and any ``ratio`` at or below that fires continuously on a note that is
+    merely sustaining. Averaging like with like puts the resting ratio at 1.0,
+    so ``ratio`` means what it says: how much louder than the last moment
+    counts as a new note.
+
+    Useful ``ratio`` values are consequently small. A note picked 130 ms after
+    the last one has only decayed to about 0.7 of its level, so the rise the
+    detector actually sees is on the order of 10 percent, not 50; anything
+    above roughly 1.15 hears the first note of a fast run and nothing after it.
+
     state = [fast, slow, countdown]
     """
     f = state[0]
@@ -740,9 +754,16 @@ def onset_detect(x, thresh, fast_c, slow_c, ratio, refractory, state):
     for i in range(x.shape[0]):
         a = abs(x[i])
         f += (a - f) * (fast_c if a > f else fast_c * 0.05)
-        s += (a - s) * slow_c
+        s += (f - s) * slow_c
         if count > 0.0:
             count -= 1.0
+            # While the refractory runs, the baseline is dragged up to follow
+            # the attack. By the time it expires the baseline *is* this note's
+            # level, so one pick stroke cannot fire a second time while it is
+            # still swelling -- which it otherwise does, because the attack
+            # takes longer to peak than the refractory takes to expire.
+            if f > s:
+                s = f
         elif f > thresh and f > s * ratio:
             fired = 1.0
             count = refractory
@@ -757,9 +778,110 @@ def onset_detect(x, thresh, fast_c, slow_c, ratio, refractory, state):
     return fired
 
 
+@njit(**JIT)
+def chip_crush(x, y, sq_a, sq_b, pw, levels, step, atk, rel, state):
+    """Square-ify the signal, then throw away resolution in both axes.
+
+    Three things happen per sample, in the order an 8-bit console did them:
+
+    *Squaring* replaces the guitar's waveform with a pulse of the same
+    amplitude. The comparison is against a threshold proportional to the
+    envelope rather than against zero, and that is what gives ``pw`` its
+    pulse-width character: at 0.5 it is a symmetric square, off to either side
+    it thins towards the hollow, nasal tone of a duty-cycle sweep. Scaling the
+    pulse by the envelope keeps your picking dynamics, which a plain sign()
+    would flatten into a constant buzz.
+
+    *Sample and hold*, one sample in ``step``, is the downsampler. The point is
+    the aliasing, not the lost treble: everything above the new Nyquist folds
+    back down as inharmonic ring, and leaving it unfiltered is the effect.
+
+    *Quantisation* to ``levels`` steps is the bit crusher. Its noise floor is
+    fixed while the signal is not, so a decaying note grinds its way down
+    through the last few steps -- the characteristic gritty tail.
+
+    state = [envelope, held sample, countdown]
+    """
+    n = x.shape[0]
+    env = state[0]
+    hold = state[1]
+    count = state[2]
+    dsq = (sq_b - sq_a) / n
+    sq = sq_a
+    thr = (0.5 - pw) * 2.0
+    inv = 1.0 / levels
+
+    for i in range(n):
+        xi = x[i]
+        a = abs(xi)
+        if a > env:
+            env += (a - env) * atk
+        else:
+            env += (a - env) * rel
+
+        pulse = env if xi > thr * env else -env
+        v = xi + (pulse - xi) * sq
+
+        if count <= 0.0:
+            hold = v
+            count = step
+        count -= 1.0
+
+        y[i] = np.floor(hold * levels + 0.5) * inv
+        sq += dsq
+
+    if env < 1e-20:
+        env = 0.0
+    state[0] = env
+    state[1] = hold
+    state[2] = count
+
+
+@njit(**JIT)
+def pluck_env(env_out, trigger, atk_inc, dec_coef, floor_v, state):
+    """Short percussive envelope, restarted by every note you play.
+
+    Decays towards ``floor_v`` rather than to zero, so ``floor_v = 1`` leaves
+    the signal untouched and ``floor_v = 0`` chokes it completely. That is how
+    the depth control works without needing a second multiply.
+
+    state = [stage, level]; stage 1 = attacking, 0 = decaying.
+    """
+    n = env_out.shape[0]
+    stage = state[0]
+    lvl = state[1]
+
+    if trigger > 0.5:
+        stage = 1.0
+
+    for i in range(n):
+        if stage == 1.0:
+            lvl += atk_inc
+            if lvl >= 1.0:
+                lvl = 1.0
+                stage = 0.0
+        else:
+            lvl = floor_v + (lvl - floor_v) * dec_coef
+        env_out[i] = lvl
+
+    state[0] = stage
+    state[1] = lvl
+
+
 # ---------------------------------------------------------------------------
 # Mixing helpers
 # ---------------------------------------------------------------------------
+
+
+@njit(**JIT)
+def apply_gain_env(y, env, g_a, g_b):
+    """In place: y *= env * gain, with the gain swept across the block."""
+    n = y.shape[0]
+    dg = (g_b - g_a) / n
+    g = g_a
+    for i in range(n):
+        y[i] *= env[i] * g
+        g += dg
 
 
 @njit(**JIT)

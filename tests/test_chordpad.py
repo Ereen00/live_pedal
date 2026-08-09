@@ -59,6 +59,10 @@ def make_chain(**overrides) -> Chain:
         "threshold_db": -34,
         "retrigger_ms": 150,
         "hold_db": -46,
+        # Off unless a test is specifically about following, so the envelope
+        # tests measure the envelope rather than the guitar's decay.
+        "follow": 0,
+        "change_on_trigger": 1,
         "unison": 1,
         "detune": 0,
         "cutoff": 12000,
@@ -217,6 +221,87 @@ def test_chord_change_waits_for_next_note() -> None:
           fx._active_chord == 3, f"active={fx._active_chord}")
 
 
+def test_chord_changes_immediately() -> None:
+    """With change_on_trigger off, a gesture is audible without playing.
+
+    This is the default now. Waiting for the next note is musically tidier but
+    it makes the gestures impossible to learn: you make a shape, hear nothing
+    change, and cannot tell whether the camera missed you or the setting is
+    working as designed.
+    """
+    print("\nchange_on_trigger 0: the gesture takes effect straight away")
+    chain = make_chain(change_on_trigger=0, release_ms=4000)
+    fx = chain.effects[0]
+    i = chain.index["chordpad.chord"]
+
+    x = np.zeros(BLOCK)
+    y = np.zeros(BLOCK)
+    sig = pluck(BLOCK * 30)
+    for b in range(30):
+        x[:] = sig[b * BLOCK : (b + 1) * BLOCK]
+        chain.process(x, y)
+
+    chain.target[i] = 3.0
+    x[:] = 0.0
+    chain.process(x, y)
+    check("chord switches on the very next block", fx._active_chord == 3,
+          f"active={fx._active_chord}")
+
+
+def test_follow_kills_the_pad_with_the_note() -> None:
+    """follow high: the chord is a shadow of the note, not a separate tail."""
+    print("\nfollow: the chord dies when the note dies")
+    # hold_db is deliberately far below anything the note reaches, so the ADSR
+    # gate never opens the release by itself. Whatever difference shows up is
+    # follow's doing and nothing else's.
+    common = dict(release_ms=2000, attack_ms=20, decay_ms=200, sustain=0.9,
+                  hold_db=-75)
+    # A short, fast-decaying note, then real silence.
+    sig = np.concatenate([pluck(BLOCK * 30, decay=8.0), np.zeros(BLOCK * 300)])
+    # Two sampling windows, well after the note has died. Following should be
+    # quieter at both, and the gap should widen -- the point is that it keeps
+    # going down rather than settling at some reduced level.
+    windows = {"600 ms": (0.6, 0.8), "1.2 s": (1.2, 1.4)}
+
+    levels: dict[str, dict[str, float]] = {}
+    for name, follow in (("free", 0.0), ("following", 0.9)):
+        pad = run(make_chain(follow=follow, follow_db=-14, **common), sig)
+        peak = float(np.max(np.abs(pad)))
+        check(f"{name}: pad was audible", peak > 0.01, f"{db(peak):.0f} dB")
+        levels[name] = {
+            when: float(np.max(np.abs(pad[int(a * SR) : int(b * SR)])))
+            for when, (a, b) in windows.items()
+        }
+        if name == "following":
+            env = envelope_of(pad)
+            worst = float(np.min(np.diff(env[int(np.argmax(env)):])))
+            check("following still fades rather than cutting",
+                  worst > -peak * 0.35,
+                  f"largest step {worst / peak * 100:.0f}% of peak")
+
+    # The bar is not tighter than this because the level that follow tracks is
+    # smoothed over 180 ms; that lag is exactly what keeps the fade smooth
+    # instead of gating the pad off the moment the string stops.
+    for when, bar in (("600 ms", 0.45), ("1.2 s", 0.20)):
+        ratio = levels["following"][when] / max(levels["free"][when], 1e-12)
+        check(f"following is much quieter at {when}", ratio < bar,
+              f"{db(levels['following'][when]):.0f} dB vs "
+              f"{db(levels['free'][when]):.0f} dB  (ratio {ratio:.2f})")
+
+
+def test_follow_tracks_dynamics() -> None:
+    """A quiet note gets a quiet chord."""
+    print("\nfollow: the chord tracks how hard you played")
+    loud = run(make_chain(follow=1.0, follow_db=-14),
+               pluck(BLOCK * 120, decay=1.0, amp=0.35))
+    quiet = run(make_chain(follow=1.0, follow_db=-14),
+                pluck(BLOCK * 120, decay=1.0, amp=0.03))
+    pl = float(np.max(np.abs(loud)))
+    pq = float(np.max(np.abs(quiet)))
+    check("loud note gives a louder chord", pl > pq * 2.0,
+          f"{db(pl):.0f} dB vs {db(pq):.0f} dB")
+
+
 def test_chord_persists() -> None:
     print("\nthe selected chord stays selected across many notes")
     chain = make_chain()
@@ -266,6 +351,9 @@ def main() -> int:
     test_release_is_gradual()
     test_correct_pitches()
     test_chord_change_waits_for_next_note()
+    test_chord_changes_immediately()
+    test_follow_kills_the_pad_with_the_note()
+    test_follow_tracks_dynamics()
     test_chord_persists()
     test_output_is_sane()
 

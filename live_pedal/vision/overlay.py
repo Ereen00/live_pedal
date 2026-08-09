@@ -53,6 +53,21 @@ def draw_skeleton(frame, lm_xy: np.ndarray, colour=ACCENT) -> None:
         cv2.circle(frame, p, r, FG, -1, cv2.LINE_AA)
 
 
+def draw_chord(frame, label: str) -> None:
+    """Name the selected chord, large, over the camera image.
+
+    Large because you read it from guitar-playing distance, and over the image
+    because that is where you are already looking to check the tracker has your
+    hand. It shows what a gesture selected, not what is sounding -- the whole
+    question while you are learning the poses is whether the camera saw you.
+    """
+    (tw, th), _ = cv2.getTextSize(label, FONT, 1.4, 3)
+    x, y = 16, 20 + th
+    cv2.rectangle(frame, (x - 10, y - th - 12), (x + tw + 10, y + 12),
+                  (18, 16, 15), -1)
+    cv2.putText(frame, label, (x, y), FONT, 1.4, ACCENT, 3, cv2.LINE_AA)
+
+
 def compose(
     frame: np.ndarray,
     features: np.ndarray,

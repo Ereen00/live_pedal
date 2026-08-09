@@ -136,6 +136,102 @@ def test_poses() -> None:
     check("one frame is not enough", f[FEATURE_INDEX["pose_fist"]] < 0.5)
 
 
+def settle(world: np.ndarray, frames: int = 5) -> np.ndarray:
+    """Hold one hand shape long enough for the pose hysteresis to accept it."""
+    ex = FeatureExtractor(smoothing=0.0, pose_frames=3)
+    f = None
+    for i in range(frames):
+        f = extract(world, ex, t=i * 0.03)
+    return f
+
+
+def test_chord_poses() -> None:
+    """The four poses that select chords must be reliable and exclusive.
+
+    This is the test that matters most in practice: a pose that needs a
+    textbook hand shape is a pose that never fires while you are holding a
+    guitar, and two poses that overlap fight over the same chord parameter.
+    """
+    print("\nchord poses: each fires, and only one at a time")
+    OPEN, FIST = 3.0, 80.0
+    shapes = {
+        # Deliberately sloppy: fingers not fully straight, fist not fully
+        # closed, pinky lazy -- the way a hand actually looks mid-song.
+        "pose_open": make_hand(18.0, per_finger={4: 30.0}),
+        "pose_fist": make_hand(FIST, thumb_bend_deg=70.0),
+        "pose_point": make_hand(FIST, thumb_bend_deg=70.0,
+                                per_finger={1: OPEN}),
+        "pose_peace": make_hand(FIST, thumb_bend_deg=70.0,
+                                per_finger={1: OPEN, 2: OPEN}),
+    }
+    pose_names = [n for n in FEATURE_INDEX if n.startswith("pose_")]
+
+    for want, world in shapes.items():
+        f = settle(world)
+        fired = [n for n in pose_names if f[FEATURE_INDEX[n]] > 0.5]
+        check(f"{want[5:]} detected", f[FEATURE_INDEX[want]] > 0.5,
+              f"fired={fired or 'nothing'}")
+        check(f"{want[5:]} is the only pose", fired == [want],
+              f"fired={fired}")
+
+
+def test_pose_hysteresis_gap() -> None:
+    """A finger hovering near the threshold must not chatter.
+
+    Without hysteresis a half-bent finger crossing back and forth over one
+    threshold retriggers the latch every few frames, and the chord flickers
+    between two values while your hand is perfectly still.
+    """
+    print("\npose stability: a finger held near the boundary does not chatter")
+    ex = FeatureExtractor(smoothing=0.0, pose_frames=3)
+    flips = 0
+    was = None
+    for i in range(40):
+        # Ring finger wobbles by a couple of degrees right at the boundary.
+        wobble = 44.0 + (2.0 if i % 2 else -2.0)
+        f = extract(make_hand(80.0, thumb_bend_deg=70.0,
+                              per_finger={1: 3.0, 3: wobble}), ex, t=i * 0.03)
+        now = f[FEATURE_INDEX["pose_point"]] > 0.5
+        if was is not None and now != was:
+            flips += 1
+        was = now
+    check("pose does not flicker", flips <= 1, f"{flips} change(s) in 40 frames")
+
+
+def test_latch_selects_chords() -> None:
+    """Four poses, one chord parameter, no interference."""
+    print("\nmapping: four latched poses select four chords")
+    layout = ParamLayout(
+        names=["chordpad.chord", "chordpad.enable"],
+        lo=[0.0, 0.0], hi=[15.0, 1.0], defaults=[0.0, 1.0],
+        curves=["lin", "lin"], units=["", ""],
+    )
+    poses = ["pose_open", "pose_fist", "pose_point", "pose_peace"]
+    m = Mapper(
+        [{"source": p, "target": "chordpad.chord", "hi": i, "mode": "latch"}
+         for i, p in enumerate(poses)],
+        layout,
+    )
+    check("no conflict warning for latched rules", not m.warnings,
+          "; ".join(m.warnings))
+
+    f = np.zeros(len(FEATURE_INDEX), dtype=np.float32)
+    f[FEATURE_INDEX["present"]] = 1.0
+
+    # Out of order, to prove rule order does not decide the winner.
+    for want, pose in [(2, "pose_point"), (0, "pose_open"),
+                       (3, "pose_peace"), (1, "pose_fist")]:
+        f[FEATURE_INDEX[pose]] = 1.0
+        got = m.update(f)[0]
+        check(f"{pose[5:]} selects chord {want}", got == want, f"got {got:g}")
+        f[FEATURE_INDEX[pose]] = 0.0
+        held = m.update(f)[0]
+        check(f"{pose[5:]} released, chord holds", held == want, f"got {held:g}")
+
+    f[FEATURE_INDEX["present"]] = 0.0
+    check("chord survives the hand leaving frame", m.update(f)[0] == 1.0)
+
+
 def test_position() -> None:
     print("\nposition tracking")
     left = extract(make_hand(0.0), FeatureExtractor(smoothing=0.0))
@@ -287,6 +383,9 @@ def main() -> int:
     test_openness()
     test_per_finger_curl()
     test_poses()
+    test_chord_poses()
+    test_pose_hysteresis_gap()
+    test_latch_selects_chords()
     test_position()
     test_hand_loss_holds_values()
     test_mapping_range()

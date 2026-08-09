@@ -8,6 +8,7 @@ nothing else in the system needs to know about it.
 from __future__ import annotations
 
 from .base import Effect, ParamSpec, db_to_lin
+from .chiptune import Chiptune
 from .chords import ChordPad
 from .drive import Drive
 from .filters import EQ3, Filter, Gate, Wah
@@ -21,6 +22,7 @@ ALL_EFFECTS: tuple[type[Effect], ...] = (
     Volume,
     Octaver,
     Drive,
+    Chiptune,
     ChordPad,
     Wah,
     Filter,
